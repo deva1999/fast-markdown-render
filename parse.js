@@ -1,15 +1,44 @@
 const PUNCT = /[!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]/;
+const CH_BKSL = 92, CH_BTICK = 96, CH_LT = 60, CH_AMP = 38;
+const CH_LBRK = 91, CH_BANG = 33, CH_STAR = 42, CH_USCORE = 95;
+const CH_TILDE = 126, CH_NL = 10, CH_AT = 64, CH_COLON = 58;
+const CH_SPC = 32, CH_TAB = 9, CH_CR = 13;
+const CH_0 = 48, CH_9 = 57, CH_A = 65, CH_Z = 90, CH_a = 97, CH_z = 122;
+const CH_DASH = 45, CH_DOT = 46, CH_SLASH = 47;
+const CH_LPAREN = 40, CH_RPAREN = 41, CH_GT = 62;
+const CH_QUOT = 34, CH_SQUOT = 39;
+const CH_RBRK = 93;
+const CH_PERCENT = 37, CH_HASH = 35, CH_QMARK = 63;
+const CH_e = 101, CH_E = 69, CH_m = 109, CH_M = 77, CH_x = 120, CH_X = 88;
+const CH_f = 102, CH_F = 70, CH_w = 119, CH_W = 87;
+const CH_h = 104, CH_H = 72, CH_p = 112, CH_P = 80, CH_t = 116, CH_T = 84;
+const CH_s = 115, CH_S = 83;
+function chIsAlphaNum(cc) { return (cc >= CH_a && cc <= CH_z) || (cc >= CH_A && cc <= CH_Z) || (cc >= CH_0 && cc <= CH_9); }
+function chIsWordChar(cc) { return chIsAlphaNum(cc) || cc === CH_USCORE || cc === CH_DASH; }
+function chIsUrlStart(c) { return c === 'h' || c === 'H' || c === 'f' || c === 'F' || c === 'w' || c === 'W'; }
+function chIsSchemeStart(c) { return c === 'm' || c === 'M' || c === 'x' || c === 'X'; }
+const INLINE_EARLY = /[\\`<&[!*_~\n]|(?:https?|ftp):\/\/|www\.|(?:mailto|xmpp):|@/i;
+const EMPHASIS_RX = /[*_~]/;
+const EMAIL_RX = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+/;
 const BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const ESC_HTML_RE = /[&<>"']/g;
+const ESC_HTML_MAP = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
+const ESC_CODE_RE = /[&<>"']/g;
+const ENT_NUM_RE = /&#(?:x([\da-f]{1,6})|(\d{1,7}));/gi;
+
 const BLOCK_TAG_RE = new RegExp(`^</?(?:${BLOCK_TAGS})(?:[\\t\\n ]|/?>|$)`, 'i');
 function escapeHtml(s, encode = true) {
-  return s.replace(encode ? /[&<>"']/g : /[<>"']/g, (c, offset) => {
+  if (encode) { if (s.indexOf('&') < 0 && s.indexOf('<') < 0 && s.indexOf('>') < 0 && s.indexOf('"') < 0 && s.indexOf("'") < 0) return s; }
+  else { if (s.indexOf('<') < 0 && s.indexOf('>') < 0 && s.indexOf('"') < 0 && s.indexOf("'") < 0) return s; }
+  return s.replace(encode ? ESC_HTML_RE : /[<>"']/g, (c, offset) => {
     if (c === '&' && encode && /^(?:#(?:\d{1,7}|[xX][\da-fA-F]{1,6})|[A-Za-z][A-Za-z\d]{0,31});/.test(s.slice(offset + 1))) return '&';
-    return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
+    return ESC_HTML_MAP[c];
   });
 }
-function escapeCode(s) { return s.replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]); }
+function escapeCode(s) { if (s.indexOf('&') < 0 && s.indexOf('<') < 0 && s.indexOf('>') < 0 && s.indexOf('"') < 0 && s.indexOf("'") < 0) return s; return s.replace(ESC_CODE_RE, c => ESC_HTML_MAP[c]); }
 function entity(s) {
-  return s.replace(/&#(?:x([\da-f]{1,6})|(\d{1,7}));/gi, (m, h, d) => {
+  if (s.indexOf('&#') < 0) return s;
+  return s.replace(ENT_NUM_RE, (m, h, d) => {
     const n = h ? parseInt(h, 16) : Number(d);
     return !n || n > 0x10ffff || n >= 0xd800 && n <= 0xdfff ? '\ufffd' : String.fromCodePoint(n);
   });
@@ -86,16 +115,30 @@ function findCodeEnd(source, start, length) {
   }
   return -1;
 }
-function labelKey(s) { return s.trim().replace(/[\t\n ]+/g, ' ').replace(/[ßẞ]/g, 'ss').toLowerCase(); }
-function cleanUrl(s) { try { return encodeURI(s).replace(/%25/gi, '%'); } catch { return null; } }
-function escapeAttribute(s) { return escapeHtml(s).replace(/&amp;((?:#[xX][\da-fA-F]+|#\d+|[A-Za-z][A-Za-z\d]+);)/g, '&$1'); }
+function labelKey(s) {
+  let r = s.trim();
+  if (r.indexOf('\t') < 0 && r.indexOf('\n') < 0 && r.indexOf('  ') < 0 && r.indexOf('ß') < 0 && r.indexOf('ẞ') < 0) return r.toLowerCase();
+  return r.replace(/[\t\n ]+/g, ' ').replace(/[ßẞ]/g, 'ss').toLowerCase();
+}
+function cleanUrl(s) {
+  try {
+    return encodeURI(s).replace(/%25/gi, '%');
+  } catch {
+    return null;
+  }
+}
+function escapeAttribute(s) {
+  let r = escapeHtml(s);
+  if (r.indexOf('&amp;') < 0) return r;
+  return r.replace(/&amp;((?:#[xX][\da-fA-F]+|#\d+|[A-Za-z][A-Za-z\d]+);)/g, '&$1');
+}
 function htmlTagEnd(s, start) {
-  let quote = '';
+  let quote = 0;
   for (let i = start; i < s.length; i++) {
-    const c = s[i];
-    if (quote) { if (c === quote) quote = ''; }
-    else if (c === '"' || c === "'") quote = c;
-    else if (c === '>') return i;
+    const cc = s.charCodeAt(i);
+    if (quote) { if (cc === quote) quote = 0; }
+    else if (cc === CH_QUOT || cc === CH_SQUOT) quote = cc;
+    else if (cc === CH_GT) return i;
   }
   return -1;
 }
@@ -305,8 +348,8 @@ function references(src) {
 function inline(source, refs, inLink = false) {
   if (refs._collectOnly) return '';
   let out = '', i = 0, plain = '';
-  if (!/[\\`<&[!*_~\n]|(?:https?|ftp):\/\/|www\.|(?:mailto|xmpp):|@/i.test(source)) return escapeHtml(entity(source));
-  const emphasis = /[*_~]/.test(source) ? delimiterPlan(source, refs, inLink) : new Map();
+  if (!INLINE_EARLY.test(source)) return escapeHtml(entity(source));
+  const emphasis = EMPHASIS_RX.test(source) ? delimiterPlan(source, refs, inLink) : new Map();
   const nextSpecial = /[\\`<&[!*_~\n]|(?:https?|ftp):\/\/|www\.|(?:mailto|xmpp):|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@/gi;
   const linked = () => inLink || refs._htmlLinkOpen === true;
   const flush = () => { if (plain) { out += escapeHtml(entity(plain)); plain = ''; } };
@@ -349,7 +392,7 @@ function inline(source, refs, inLink = false) {
       }
     }
     if (c === '&') {
-      const m = source.slice(i).match(/^&(?:#(?:x[\da-f]{1,6}|\d{1,7})|[A-Za-z][A-Za-z\d]{0,31});/);
+      const m = source.slice(i, i + 42).match(/^&(?:#(?:x[\da-f]{1,6}|\d{1,7})|[A-Za-z][A-Za-z\d]{0,31});/);
       if (m) { flush(); out += entity(m[0]); i += m[0].length; continue; }
     }
     if (c === '[' || c === '!' && source[i + 1] === '[') {
@@ -362,7 +405,7 @@ function inline(source, refs, inLink = false) {
           if (p >= 0) { const d = parseDestination(source.slice(after + 1, p)); if (d) { href = d.href; title = d.title; stop = p + 1; } }
         }
         if (href === undefined) {
-          m = source.slice(after).match(/^\[([^\]]*)\]/);
+          m = source.slice(after, after + 2000).match(/^\[([^\]]*)\]/);
           const key = labelKey(m && m[1] ? m[1] : label);
           if (Object.hasOwn(refs, key)) { ({ href, title } = refs[key]); stop = after + (m ? m[0].length : 0); }
         }
@@ -382,17 +425,17 @@ function inline(source, refs, inLink = false) {
       const closesEmphasis = !!email && afterEmail === '_' && emphasis.get(i + email[0].length)?.closes.length;
       if (email && (i === 0 || !/[\w-]/.test(source[i - 1])) && (!/[\w-]/.test(afterEmail) || closesEmphasis)) { flush(); out += '<a href="mailto:' + escapeAttribute(email[0]) + '">' + escapeHtml(email[0]) + '</a>'; i += email[0].length; continue; }
     }
-    if (!linked() && /^(?:mailto|xmpp):/i.test(source.slice(i))) {
-      const scheme = source.slice(i).match(/^(mailto|xmpp):/i)[1].toLowerCase();
+    if (!linked() && chIsSchemeStart(source[i]) && /^(?:mailto|xmpp):/i.test(source.slice(i))) {
+      const scheme = source.slice(i, i + 8).match(/^(mailto|xmpp):/i)[1].toLowerCase();
       const email = source.slice(i + scheme.length + 1).match(/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+/);
       if (email) {
         let text = source.slice(i, i + scheme.length + 1) + email[0];
         if (scheme === 'xmpp' && source[i + text.length] === '/') { const resource = source.slice(i + text.length).match(/^\/[^/\s]+/); if (resource) text += resource[0]; }
-        if (!/[\w-]/.test(source[i + text.length] || '')) { flush(); out += '<a href="' + escapeAttribute(cleanUrl(text)) + '">' + escapeHtml(text) + '</a>'; i += text.length; continue; }
+        if (i + text.length >= source.length || !chIsWordChar(source.charCodeAt(i + text.length))) { flush(); out += '<a href="' + escapeAttribute(cleanUrl(text)) + '">' + escapeHtml(text) + '</a>'; i += text.length; continue; }
       }
     }
-    if (!linked() && /^(?:(?:https?|ftp):\/\/|www\.)/i.test(source.slice(i))) {
-      const m = source.slice(i).match(/^(?:(?:https?|ftp):\/\/|www\.)[^\s<>]+/i);
+    if (!linked() && chIsUrlStart(source[i]) && /^(?:(?:https?|ftp):\/\/|www\.)/i.test(source.slice(i))) {
+      const m = source.slice(i, i + 4096).match(/^(?:(?:https?|ftp):\/\/|www\.)[^\s<>]+/i);
       if (m) {
         let url = m[0], trim = '';
         const openParens = [];
@@ -470,12 +513,13 @@ function hasNestedLink(source, start, end, refs) {
 function findParen(s, from) {
   let depth = 1, angle = false;
   for (let i = from; i < s.length; i++) {
-    if (s[i] === '\\') { i++; continue; }
-    if (s[i] === '<' && !angle) { angle = true; continue; }
-    if (s[i] === '>' && angle) { angle = false; continue; }
+    const cc = s.charCodeAt(i);
+    if (cc === CH_BKSL) { i++; continue; }
+    if (cc === CH_LT && !angle) { angle = true; continue; }
+    if (cc === CH_GT && angle) { angle = false; continue; }
     if (angle) continue;
-    if (s[i] === '(') depth++;
-    if (s[i] === ')' && --depth === 0) return i;
+    if (cc === CH_LPAREN) depth++;
+    if (cc === CH_RPAREN && --depth === 0) return i;
   }
   return -1;
 }
@@ -722,12 +766,12 @@ function splitCells(line) {
   line = line.trim().replace(/^\|/, '').replace(/\|$/, '');
   const out = []; let cell = '', escaped = false;
   for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '\\' && !escaped) { escaped = true; cell += c; continue; }
-    if (c === '|' && !escaped) { out.push(cell); cell = ''; } else cell += c;
+    const cc = line.charCodeAt(i);
+    if (cc === CH_BKSL && !escaped) { escaped = true; cell += '\\'; continue; }
+    if (cc === 124 && !escaped) { out.push(cell); cell = ''; } else cell += line[i];
     escaped = false;
   }
-  out.push(cell); return out.map(value => value.replace(/\\\|/g, '|'));
+  out.push(cell); return out.map(v => v.replace(/\\\|/g, '|'));
 }
 export function parse(markdown) {
   if (typeof markdown !== 'string') throw new TypeError('markdown must be a string');
