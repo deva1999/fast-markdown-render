@@ -1,5 +1,6 @@
 const PUNCT = /[!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]/;
 const BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const BLOCK_TAG_RE = new RegExp(`^</?(?:${BLOCK_TAGS})(?:[\\t\\n ]|/?>|$)`, 'i');
 function escapeHtml(s, encode = true) {
   return s.replace(encode ? /[&<>"']/g : /[<>"']/g, (c, offset) => {
     if (c === '&' && encode && /^(?:#(?:\d{1,7}|[xX][\da-fA-F]{1,6})|[A-Za-z][A-Za-z\d]{0,31});/.test(s.slice(offset + 1))) return '&';
@@ -102,13 +103,14 @@ function isHtmlTag(raw) {
   return /^<[A-Za-z][A-Za-z0-9-]*(?:[ \t\n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t]*\/?>$/.test(raw) || /^<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>$/.test(raw);
 }
 function htmlBlockType(line) {
+  if (!/^ {0,3}</.test(line)) return 0;
   const s = line.replace(/^ {0,3}/, '');
   if (/^<!--/.test(s)) return 1;
   if (/^<\?/.test(s)) return 2;
   if (/^<![A-Z]/.test(s)) return 3;
   if (/^<!\[CDATA\[/.test(s)) return 4;
   if (/^<(?:script|pre|style|textarea)(?=[\s>]|$)/i.test(s)) return 5;
-  if (new RegExp(`^</?(?:${BLOCK_TAGS})(?:[\\t\\n ]|/?>|$)`, 'i').test(s)) return 6;
+  if (BLOCK_TAG_RE.test(s)) return 6;
   const end = htmlTagEnd(s, 1);
   return end >= 0 && !s.slice(end + 1).trim() && isHtmlTag(s.slice(0, end + 1)) ? 7 : 0;
 }
@@ -301,8 +303,11 @@ function references(src) {
   return { source: lines.join('\n'), refs };
 }
 function inline(source, refs, inLink = false) {
+  if (refs._collectOnly) return '';
   let out = '', i = 0, plain = '';
-  const emphasis = delimiterPlan(source, refs, inLink);
+  if (!/[\\`<&[!*_~\n]|(?:https?|ftp):\/\/|www\.|(?:mailto|xmpp):|@/i.test(source)) return escapeHtml(entity(source));
+  const emphasis = /[*_~]/.test(source) ? delimiterPlan(source, refs, inLink) : new Map();
+  const nextSpecial = /[\\`<&[!*_~\n]|(?:https?|ftp):\/\/|www\.|(?:mailto|xmpp):|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@/gi;
   const linked = () => inLink || refs._htmlLinkOpen === true;
   const flush = () => { if (plain) { out += escapeHtml(entity(plain)); plain = ''; } };
   while (i < source.length) {
@@ -371,7 +376,7 @@ function inline(source, refs, inLink = false) {
         }
       }
     }
-    if (!linked()) {
+    if (!linked() && (i === 0 || !/[\w-]/.test(source[i - 1]))) {
       const email = source.slice(i).match(/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+/);
       const afterEmail = source[i + (email?.[0].length || 0)] || ' ';
       const closesEmphasis = !!email && afterEmail === '_' && emphasis.get(i + email[0].length)?.closes.length;
@@ -420,7 +425,10 @@ function inline(source, refs, inLink = false) {
       if (run && (run.opens.length || run.closes.length)) { flush(); out += delimiterHtml(run); i = j; continue; }
       plain += source.slice(i, j); i = j; continue;
     }
-    plain += c; i++;
+    nextSpecial.lastIndex = i + 1;
+    const next = nextSpecial.exec(source);
+    const end = next ? next.index : source.length;
+    plain += source.slice(i, end); i = end;
   }
   flush(); return out;
 }
@@ -724,7 +732,9 @@ function splitCells(line) {
 export function parse(markdown) {
   if (typeof markdown !== 'string') throw new TypeError('markdown must be a string');
   const normalized = normalizeMarkdownTabs(normalize(markdown)), refs = Object.create(null);
+  refs._collectOnly = true;
   parseBlocks(normalized, refs);
+  refs._collectOnly = false;
   refs._htmlLinkOpen = false;
   return parseBlocks(normalized, refs);
 }
